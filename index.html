@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>EmotiBit Sensor Dashboard</title>
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <style>
+    body {
+      font-family: sans-serif;
+      background: #f4f4f4;
+      text-align: center;
+      padding: 20px;
+      margin: 0;
+    }
+    h1, h2 {
+      margin: 15px 0;
+    }
+    .sensor-box {
+      display: inline-block;
+      background: white;
+      padding: 25px 40px;
+      margin: 15px;
+      border-radius: 15px;
+      box-shadow: 0 0 15px rgba(0,0,0,0.1);
+      min-width: 220px;
+      transition: all 0.3s ease;
+    }
+    .sensor-box h2 {
+      margin-top: 0;
+      font-size: 1.8em;
+    }
+    .value {
+      display: inline-block;
+      margin-right: 25px;
+      font-size: 22px;
+      font-weight: 600;
+      transition: color 0.3s ease, transform 0.3s ease;
+    }
+    .icon {
+      font-size: 36px;
+      color: #007bff;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+    .log-section {
+      background: #fff;
+      border-radius: 10px;
+      padding: 20px;
+      margin-top: 20px;
+      box-shadow: 0 0 15px rgba(0,0,0,0.05);
+      max-height: 300px;
+      overflow-y: auto;
+      text-align: left;
+      width: 100%;
+    }
+    .log-section div {
+      margin-bottom: 8px;
+      font-family: monospace;
+    }
+    #controls {
+      margin-top: 20px;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      margin: 5px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.3s ease;
+    }
+    button:hover {
+      background-color: #ddd;
+    }
+    #startWalkBtn, #startBedBtn {
+      background-color: #28a745;
+      color: white;
+    }
+    #stopBtn, #downloadRawBtn, #downloadResampledBtn {
+      background-color: #3f51b5;
+      color: white;
+      display: none;
+    }
+    #recordingStatus {
+      font-weight: bold;
+      color: green;
+      margin-top: 10px;
+    }
+    @media (max-width: 768px) {
+      .sensor-box {
+        display: block;
+        width: 80%;
+        margin: 20px auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>📡 EmotiBit Live Sensor Data (Mean per Second)</h1>
+
+  <div id="dashboard">
+    <div class="sensor-box">
+      <h2><i class="fas fa-arrows-alt icon"></i> Accelerometer</h2>
+      <div class="value" id="acc_x">X: -</div>
+      <div class="value" id="acc_y">Y: -</div>
+      <div class="value" id="acc_z">Z: -</div>
+    </div>
+    <div class="sensor-box">
+      <h2><i class="fas fa-sync-alt icon"></i> Gyroscope</h2>
+      <div class="value" id="gyro_x">X: -</div>
+      <div class="value" id="gyro_y">Y: -</div>
+      <div class="value" id="gyro_z">Z: -</div>
+    </div>
+    <div class="sensor-box">
+      <h2><i class="fas fa-compass icon"></i> Magnetometer</h2>
+      <div class="value" id="mag_x">X: -</div>
+      <div class="value" id="mag_y">Y: -</div>
+      <div class="value" id="mag_z">Z: -</div>
+    </div>
+    <button onclick="setMagBaseline()">Set MAG Baseline</button>
+    <p id="baseline-status">Baseline ยังไม่ได้ตั้งค่า</p>
+  </div>
+
+  <div id="controls">
+    <button id="startWalkBtn">เริ่มบันทึกการเดินภายในบ้าน</button>
+    <button id="startBedBtn">เริ่มบันทึกการลุกจากเตียงไปห้องน้ำ</button>
+    <button id="stopBtn">หยุดการบันทึก & Download CSV</button>
+    <button id="downloadRawBtn">ดาวน์โหลดไฟล์ดิบ</button>
+    <button id="downloadResampledBtn">ดาวน์โหลดไฟล์รีแซมป์</button>
+    <div id="recordingStatus"></div>
+  </div>
+
+  <h2>🚨 Critical Sensor Logs</h2>
+  <div style="display: flex; justify-content: center; gap: 20px; flex-wrap: wrap;">
+    <div class="log-section" style="flex: 1; min-width: 300px;">
+      <h3>Accelerometer Logs</h3>
+      <div id="acc-log"></div>
+    </div>
+    <div class="log-section" style="flex: 1; min-width: 300px;">
+      <h3>Gyroscope Logs</h3>
+      <div id="gyro-log"></div>
+    </div>
+  </div>
+
+  <script>
+    const socket = io();
+    const expectedSensors = ["ACC", "GYRO", "MAG"];
+    const expectedAxes = ["x", "y", "z"];
+    const logs = { ACC: [], GYRO: [] };
+
+    const startWalkBtn = document.getElementById("startWalkBtn");
+    const startBedBtn = document.getElementById("startBedBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const downloadRawBtn = document.getElementById("downloadRawBtn");
+    const downloadResampledBtn = document.getElementById("downloadResampledBtn");
+    const statusDiv = document.getElementById("recordingStatus");
+
+    function resetUI() {
+      startWalkBtn.disabled = false;
+      startWalkBtn.style.display = 'inline-block';
+      startBedBtn.disabled = false;
+      startBedBtn.style.display = 'inline-block';
+      stopBtn.disabled = true;
+      stopBtn.style.display = 'none';
+      downloadRawBtn.style.display = 'none';
+      downloadResampledBtn.style.display = 'none';
+      statusDiv.textContent = '';
+      statusDiv.style.color = '';
+    }
+
+    startWalkBtn.onclick = () => {
+      socket.emit("start_recording", { activity: "walk" });
+      startWalkBtn.disabled = true;
+      startWalkBtn.style.display = 'none';
+      startBedBtn.disabled = true;
+      startBedBtn.style.display = 'none';
+      stopBtn.disabled = false;
+      stopBtn.style.display = 'inline-block';
+      downloadRawBtn.style.display = 'none';
+      downloadResampledBtn.style.display = 'none';
+      statusDiv.textContent = "กำลังบันทึกการเดิน...";
+      statusDiv.style.color = "green";
+    };
+
+    startBedBtn.onclick = () => {
+      socket.emit("start_recording", { activity: "bed to toilet" });
+      startWalkBtn.disabled = true;
+      startWalkBtn.style.display = 'none';
+      startBedBtn.disabled = true;
+      startBedBtn.style.display = 'none';
+      stopBtn.disabled = false;
+      stopBtn.style.display = 'inline-block';
+      downloadRawBtn.style.display = 'none';
+      downloadResampledBtn.style.display = 'none';
+      statusDiv.textContent = "กำลังบันทึกการลุกจากเตียงไปห้องน้ำ...";
+      statusDiv.style.color = "green";
+    };
+
+    stopBtn.onclick = () => {
+      socket.emit("stop_recording");
+      stopBtn.disabled = true;
+      statusDiv.textContent = "กำลังหยุดการบันทึก...";
+      statusDiv.style.color = "red";
+    };
+
+    function addLog(sensor, x, y, z) {
+      const now = new Intl.DateTimeFormat('th-TH', {
+        timeZone: 'Asia/Bangkok',
+        dateStyle: 'short',
+        timeStyle: 'medium'
+      }).format(new Date());
+      const entry = document.createElement("div");
+      entry.innerHTML = `<strong>[${now}]</strong> X: <span style="color:red">${x.toFixed(2)}</span>, Y: <span style="color:red">${y.toFixed(2)}</span>, Z: <span style="color:red">${z.toFixed(2)}</span>`;
+      const logContainer = document.getElementById(sensor.toLowerCase() + "-log");
+      logContainer.prepend(entry);
+      logs[sensor].unshift(entry);
+      if (logs[sensor].length > 10) {
+        const removed = logs[sensor].pop();
+        removed.remove();
+      }
+    }
+
+    socket.on("sensor_data", (data) => {
+      for (const sensor of expectedSensors) {
+        const sensorData = data[sensor];
+        if (!sensorData) continue;
+
+        let abnormal = false;
+        const values = {};
+
+        for (const axis of expectedAxes) {
+          const value = sensorData[axis];
+          if (value === undefined) continue;
+
+          const elementId = `${sensor.toLowerCase()}_${axis}`;
+          const element = document.getElementById(elementId);
+          if (!element) continue;
+
+          const floatValue = parseFloat(value);
+          values[axis] = floatValue;
+          const text = `${axis.toUpperCase()}: ${floatValue.toFixed(4)}`;
+
+          if (element.textContent !== text) {
+            element.textContent = text;
+
+            let isCritical = false;
+            if (sensor === "ACC" && Math.abs(floatValue) > 2.0) isCritical = true;
+            if (sensor === "GYRO" && Math.abs(floatValue) > 300.0) isCritical = true;
+
+            element.style.color = isCritical ? "red" : "#3de505";
+            element.style.transform = isCritical ? "scale(1.1)" : "";
+            setTimeout(() => {
+              element.style.color = "";
+              element.style.transform = "";
+            }, 200);
+
+            if (isCritical) abnormal = true;
+          }
+        }
+
+        if (abnormal && (sensor === "ACC" || sensor === "GYRO")) {
+          addLog(sensor, values.x, values.y, values.z);
+        }
+      }
+    });
+
+    socket.on("recording_stopped", (response) => {
+      if (response.status === "success") {
+        statusDiv.textContent = "บันทึกสำเร็จ! พร้อมดาวน์โหลดไฟล์";
+        statusDiv.style.color = "blue";
+        stopBtn.style.display = 'none';
+        downloadRawBtn.style.display = 'inline-block';
+        downloadResampledBtn.style.display = 'inline-block';
+        downloadRawBtn.onclick = () => window.location.href = response.download_urls.raw;
+        downloadResampledBtn.onclick = () => window.location.href = response.download_urls.resampled;
+      } else {
+        statusDiv.textContent = `เกิดข้อผิดพลาด: ${response.message}`;
+        statusDiv.style.color = "red";
+        resetUI();
+      }
+    });
+
+    function setMagBaseline() {
+      socket.emit("set_mag_baseline");
+      document.getElementById("baseline-status").innerText = "กำลังตั้งค่า baseline...";
+    }
+
+    socket.on("mag_baseline_status", (baseline) => {
+      document.getElementById("baseline-status").innerText =
+        `Baseline ตั้งค่าแล้ว: x=${baseline.x.toFixed(2)}, y=${baseline.y.toFixed(2)}, z=${baseline.z.toFixed(2)}`;
+    });
+
+    socket.on("baseline_data", (data) => {
+      console.log("Baseline data:", data);
+    });
+
+    window.addEventListener('load', resetUI);
+    window.addEventListener('popstate', resetUI);
+  </script>
+</body>
+</html>
