@@ -245,8 +245,8 @@
             element.textContent = text;
 
             let isCritical = false;
-            if (sensor === "ACC" && Math.abs(floatValue) > 2.0) isCritical = true;
-            if (sensor === "GYRO" && Math.abs(floatValue) > 300.0) isCritical = true;
+            if (sensor === "ACC" && Math.abs(floatValue) > 1.5) isCritical = true;
+            if (sensor === "GYRO" && Math.abs(floatValue) > 150.0) isCritical = true;
 
             element.style.color = isCritical ? "red" : "#3de505";
             element.style.transform = isCritical ? "scale(1.1)" : "";
